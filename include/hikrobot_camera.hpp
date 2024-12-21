@@ -54,7 +54,7 @@ namespace camera
          * @param p_handle 线程上下文句柄。
          * @return 返回线程处理的结果。
          */
-        static void *HKWorkThread(void *p_handle);
+        void *HKWorkThread(void *p_handle);
 
         /**
          * @brief 打印摄像头设备信息。
@@ -254,7 +254,7 @@ namespace camera
         nRet = MV_CC_GetEnumValue(handle, "PixelFormat", &t);
         if (MV_OK == nRet)
         {
-            printf("PixelFormat :%d!\n", t.nCurValue)
+            printf("PixelFormat :%d!\n", t.nCurValue);
         }
         else
         {
