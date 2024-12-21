@@ -2,7 +2,7 @@
 #define CAMERA_HPP
 #include "ros/ros.h"
 #include <stdio.h>
-#include <pthread.h>
+#include <thread>
 #include <opencv2/opencv.hpp>
 #include "MvErrorDefine.h"
 #include "CameraParams.h"
@@ -11,10 +11,6 @@
 #define MAX_IMAGE_DATA_SIZE (4 * 2048 * 3072)
 namespace camera
 {
-    cv::Mat frame;
-    bool frame_empty = 0;  // 空帧标致
-    pthread_mutex_t mutex; // 读写锁
-
     enum CamerProperties
     {
         CAP_PROP_FRAMERATE_ENABLE,  //帧数可调
@@ -50,11 +46,10 @@ namespace camera
         ~Camera();
 
         /**
-         * @brief 原始信息转换线程函数。
-         * @param p_handle 线程上下文句柄。
-         * @return 返回线程处理的结果。
+         * @brief 工作函数。
+         * @return 返回处理的结果。
          */
-        void *HKWorkThread(void *p_handle);
+        void *HKRun();
 
         /**
          * @brief 打印摄像头设备信息。
@@ -266,22 +261,6 @@ namespace camera
         if (MV_OK != nRet)
         {
             printf("MV_CC_StartGrabbing fail! nRet [%x]\n", nRet);
-            exit(-1);
-        }
-
-        //初始化互斥量
-        nRet = pthread_mutex_init(&mutex, NULL);
-        if (nRet != 0)
-        {
-            perror("pthread_create failed\n");
-            exit(-1);
-        }
-
-        // 创建线程处理摄像头数据
-        nRet = pthread_create(&nThreadID, NULL, HKWorkThread, handle);
-        if (nRet != 0)
-        {
-            printf("thread create failed.ret = %d\n", nRet);
             exit(-1);
         }
     }
@@ -624,29 +603,11 @@ namespace camera
         return true;
     }
 
-    //^ ********************************** Camera constructor************************************ //
-    void Camera::ReadImg(cv::Mat &image)
-    {
-        pthread_mutex_lock(&mutex);
-        if (frame_empty)
-        {
-            image = cv::Mat();
-        }
-        else
-        {
-            image = camera::frame.clone();
-            frame_empty = 1;
-        }
-        pthread_mutex_unlock(&mutex);
-    }
-
     /**
-     * @brief 线程函数，用于从相机获取帧图像并进行格式转换。
-     * 
-     * @param p_handle 相机句柄，用于与相机硬件交互。
-     * @return 返回 NULL，表示线程结束。
+     * @brief 工作函数。
+     * @return 返回处理的结果。
      */
-    void *Camera::HKWorkThread(void *p_handle)
+    void *Camera::HKRun()
     {
         int nRet;
         // double start; // 记录帧采集开始时间
@@ -689,10 +650,7 @@ namespace camera
             stConvertParam.enDstPixelType = PixelType_Gvsp_BGR8_Packed; //ch:输出像素格式 | en:output pixel format
             MV_CC_ConvertPixelType(p_handle, &stConvertParam); // 转换图像格式为BGR8
             
-            pthread_mutex_lock(&mutex);
-            camera::frame = cv::Mat(stImageInfo.nHeight, stImageInfo.nWidth, CV_8UC3, m_pBufForSaveImage).clone();
-            frame_empty = 0; // 更新空帧标志
-            pthread_mutex_unlock(&mutex);
+            cv::Mat frame = cv::Mat(stImageInfo.nHeight, stImageInfo.nWidth, CV_8UC3, m_pBufForSaveImage).clone();
 
             cv_ptr->image = frame;
             image_msg = *(cv_ptr->toImageMsg());
