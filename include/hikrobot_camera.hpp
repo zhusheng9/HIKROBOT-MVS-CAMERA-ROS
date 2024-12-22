@@ -1,8 +1,7 @@
 #ifndef CAMERA_HPP
 #define CAMERA_HPP
-#include "ros/ros.h"
 #include <stdio.h>
-#include <thread>
+#include "ros/ros.h"
 #include <opencv2/opencv.hpp>
 #include "MvErrorDefine.h"
 #include "CameraParams.h"
@@ -37,6 +36,7 @@ namespace camera
         /**
          * @brief 构造函数，初始化 Camera 实例。
          * @param node ROS 节点句柄。
+         * @param topic_name 话题名称。
          */
         Camera(ros::NodeHandle &node, std::string topic_name);
 
@@ -47,9 +47,8 @@ namespace camera
 
         /**
          * @brief 工作函数。
-         * @return 返回处理的结果。
          */
-        void *HKRun();
+        void HKRun();
 
         /**
          * @brief 打印摄像头设备信息。
@@ -72,15 +71,8 @@ namespace camera
          */
         bool reset();
 
-        /**
-         * @brief 从摄像头读取原始图像。
-         * @param image OpenCV 的 Mat 对象，用于存储读取的图像。
-         */
-        void ReadImg(cv::Mat &image);
-
     private:
-        void *handle;             // 摄像头句柄，用于与硬件交互。
-        pthread_t nThreadID;      // 线程 ID，用于管理摄像头处理线程。
+        void *handle = NULL;      // 摄像头句柄，用于与硬件交互。
         int nRet;                 // 返回值变量，用于存储函数返回状态。
 
         int width;                // 图像宽度配置。
@@ -110,16 +102,15 @@ namespace camera
      */
     Camera::Camera(ros::NodeHandle &node, std::string topic_name) : main_cam_image(node)
     {
-        handle = NULL;
+        image_pub = main_cam_image.advertiseCamera(topic_name, 100);
 
-        image_pub = main_cam_image.advertiseCamera(topic_name, 1000);
         // 读取摄像头参数配置，如果未提供，则使用默认值
         node.param("width", width, 2600);                      // 图像宽度
         node.param("height", height, 2160);                    // 图像高度
         node.param("FrameRateEnable", FrameRateEnable, false); // 帧率启用开关
         node.param("FrameRate", FrameRate, 10);                // 帧率值
-        node.param("BurstFrameCount", BurstFrameCount, 10);    // 一次触发采集的帧数
-        node.param("ExposureTime", ExposureTime, 50000);       // 曝光时间（单位：微秒）
+        node.param("BurstFrameCount", BurstFrameCount, 1);     // 一次触发采集的帧数
+        node.param("ExposureTime", ExposureTime, 40000);       // 曝光时间（单位：微秒）
         node.param("GammaEnable", GammaEnable, false);         // 伽马校正启用开关
         node.param("Gamma", Gamma, (float)0.7);                // 伽马值
         node.param("GainAuto", GainAuto, 2);                   // 自动增益模式
@@ -128,7 +119,7 @@ namespace camera
         node.param("Offset_x", Offset_x, 0);                   // 图像偏移量（X 轴）
         node.param("Offset_y", Offset_y, 0);                   // 图像偏移量（Y 轴）
         node.param("TriggerMode", TriggerMode, 1);             // 触发模式
-        node.param("TriggerSource", TriggerSource, 2);         // 触发源
+        node.param("TriggerSource", TriggerSource, 0);         // 触发源
         node.param("LineSelector", LineSelector, 2);           // 线路选择
 
         // 枚举设备
@@ -186,7 +177,7 @@ namespace camera
         this->set(CAP_PROP_WIDTH, width);                    // 设置图像宽度
         this->set(CAP_PROP_OFFSETX, Offset_x);               // 设置图像偏移量（X 轴）
         this->set(CAP_PROP_OFFSETY, Offset_y);               // 设置图像偏移量（Y 轴）
-        this->set(CAP_PROP_EXPOSURE_TIME, ExposureTime);      // 设置曝光时间
+        this->set(CAP_PROP_EXPOSURE_TIME, ExposureTime);     // 设置曝光时间
         this->set(CAP_PROP_GAMMA_ENABLE, GammaEnable);       // 启用伽马校正
         if (GammaEnable) 
             this->set(CAP_PROP_GAMMA, Gamma);                // 设置伽马值
@@ -270,11 +261,6 @@ namespace camera
      */
     Camera::~Camera()
     {
-        int nRet;
-        
-        // 等待线程结束
-        pthread_join(nThreadID, NULL);
-
         // 停止取流
         nRet = MV_CC_StopGrabbing(handle);
         if (MV_OK != nRet)
@@ -301,9 +287,6 @@ namespace camera
             exit(-1);
         }
         printf("MV_CC_DestroyHandle succeed.\n");
-        
-        // 销毁互斥量
-        pthread_mutex_destroy(&mutex);
     }
 
     /**
@@ -607,7 +590,7 @@ namespace camera
      * @brief 工作函数。
      * @return 返回处理的结果。
      */
-    void *Camera::HKRun()
+    void Camera::HKRun()
     {
         int nRet;
         // double start; // 记录帧采集开始时间
@@ -627,7 +610,7 @@ namespace camera
             // start = static_cast<double>(cv::getTickCount()); // 获取当前时间戳
 
             // 尝试从相机读取一帧图像数据，设置超时时间为 100ms
-            nRet = MV_CC_GetOneFrameTimeout(p_handle, m_pBufForDriver, MAX_IMAGE_DATA_SIZE, &stImageInfo, 100);
+            nRet = MV_CC_GetOneFrameTimeout(handle, m_pBufForDriver, MAX_IMAGE_DATA_SIZE, &stImageInfo, 100);
             if (nRet != MV_OK)
             {
                 if (++image_empty_count > 10) // 如果读取失败，递增空帧计数器，当计数器超过阈值时退出程序
@@ -637,25 +620,21 @@ namespace camera
                 continue;
             }
             image_empty_count = 0; // 成功读取帧后重置空帧计数器
+            image_msg.header.stamp = ros::Time::now();
+            image_msg.header.frame_id = "hikrobot_camera";
             
             stConvertParam.nWidth = width;                               //ch:图像宽 | en:image width
             stConvertParam.nHeight = height;                             //ch:图像高 | en:image height
-
             stConvertParam.pSrcData = m_pBufForDriver;                  //ch:输入数据缓存 | en:input data buffer
             stConvertParam.nSrcDataLen = MAX_IMAGE_DATA_SIZE;           //ch:输入数据大小 | en:input data size
             stConvertParam.enSrcPixelType = stImageInfo.enPixelType;    //ch:输入像素格式 | en:input pixel format
-
             stConvertParam.pDstBuffer = m_pBufForSaveImage;             //ch:输出数据缓存 | en:output data buffer
             stConvertParam.nDstBufferSize = MAX_IMAGE_DATA_SIZE;        //ch:输出缓存大小 | en:output buffer size
             stConvertParam.enDstPixelType = PixelType_Gvsp_BGR8_Packed; //ch:输出像素格式 | en:output pixel format
-            MV_CC_ConvertPixelType(p_handle, &stConvertParam); // 转换图像格式为BGR8
-            
-            cv::Mat frame = cv::Mat(stImageInfo.nHeight, stImageInfo.nWidth, CV_8UC3, m_pBufForSaveImage).clone();
+            MV_CC_ConvertPixelType(handle, &stConvertParam); // 转换图像格式为BGR8
 
-            cv_ptr->image = frame;
+            cv_ptr->image = cv::Mat(stImageInfo.nHeight, stImageInfo.nWidth, CV_8UC3, m_pBufForSaveImage);
             image_msg = *(cv_ptr->toImageMsg());
-            image_msg.header.stamp = ros::Time::now();
-            image_msg.header.frame_id = "hikrobot_camera";
 
             camera_info_msg.header.frame_id = image_msg.header.frame_id;
             camera_info_msg.header.stamp = image_msg.header.stamp;
@@ -671,8 +650,6 @@ namespace camera
         // 释放内存资源
         free(m_pBufForDriver);
         free(m_pBufForSaveImage);
-
-        return 0;
     }
 
 } // namespace camera
