@@ -3,7 +3,7 @@
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
 
-#include <MvCameraControl.h>
+#include "MvCameraControl.h"
 #include "MvErrorDefine.h"
 #include "CameraParams.h"
 
@@ -18,8 +18,6 @@ ros::Publisher image_pub;
 void __stdcall ImageCallback(unsigned char *pData, MV_FRAME_OUT_INFO_EX *pFrameInfo, void *pUser) 
 {
     if (pFrameInfo == nullptr) return;
-    
-    ros::Time now = ros::Time::now();
 
     stConvertParam.nWidth = pFrameInfo->nWidth;               // ch:图像宽 | en:image width
     stConvertParam.nHeight = pFrameInfo->nHeight;             // ch:图像高 | en:image height
@@ -27,13 +25,16 @@ void __stdcall ImageCallback(unsigned char *pData, MV_FRAME_OUT_INFO_EX *pFrameI
     stConvertParam.pSrcData = pData;                          // ch:输入数据缓存 | en:input data buffer
     MV_CC_ConvertPixelType(handle, &stConvertParam);          // 转换图像格式为BGR8
 
-    ROS_INFO("Receive image at %ld\n", pFrameInfo->nHostTimeStamp);
+    // ROS_INFO("Receive image at %ld\n", pFrameInfo->nHostTimeStamp);
 
     // 将OpenCV图像转换为ROS图像消息
     cv::Mat frame(pFrameInfo->nHeight, pFrameInfo->nWidth, CV_8UC3, m_pBufForSaveImage);
     sensor_msgs::ImagePtr image_msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", frame).toImageMsg();
 
-    image_msg->header.stamp = now;
+    uint64_t sec = pFrameInfo->nHostTimeStamp / 1000;
+    uint64_t nsec = (pFrameInfo->nHostTimeStamp % 1000) * 1000000;
+    image_msg->header.stamp.sec = sec;
+    image_msg->header.stamp.nsec = nsec;
     image_msg->header.frame_id = "camera_frame";
 
     // 发布图像和相机信息
@@ -58,7 +59,7 @@ int main(int argc, char **argv)
     int triggerSource;        // 触发源
 
     // 创建图像发布器
-    image_pub = nh.advertise<sensor_msgs::Image>("/hikrobot_camera/rgb", 1);
+    image_pub = nh.advertise<sensor_msgs::Image>("/hikrobot_camera/rgb", 10);
     
     // 转换后图像数据缓存
     m_pBufForSaveImage = (unsigned char *)malloc(MAX_IMAGE_DATA_SIZE); 
@@ -137,7 +138,7 @@ int main(int argc, char **argv)
     }
 
     // 设置帧率
-    nRet = MV_CC_SetBoolValue(handle, "AcquisitionFrameRateEnable", frameRate);
+    nRet = MV_CC_SetBoolValue(handle, "AcquisitionFrameRateEnable", frameRateEnable);
     if (nRet != MV_OK) {
         ROS_ERROR("Failed to set frame rate enable! Error code: %d", nRet);
     }
@@ -155,7 +156,7 @@ int main(int argc, char **argv)
     }
     
     // 设置伽马
-    nRet = MV_CC_SetBoolValue(handle, "GammaEnable", gamma);
+    nRet = MV_CC_SetBoolValue(handle, "GammaEnable", gammaEnable);
     if (nRet != MV_OK) {
         ROS_ERROR("Failed to set gamma enable! Error code: %d", nRet);
     }
