@@ -50,7 +50,9 @@
         "xstddef": "cpp",
         "xstring": "cpp",
         "xtr1common": "cpp",
-        "xutility": "cpp"
+        "xutility": "cpp",
+        "variant": "cpp",
+        "random": "cpp"
     },
     "cmake.configureOnOpen": false
 }
