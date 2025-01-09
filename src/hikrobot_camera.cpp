@@ -1,5 +1,6 @@
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
+#include <image_transport/image_transport.h>
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
 
@@ -12,18 +13,18 @@
 void *handle = NULL;
 uint8_t *m_pBufForSaveImage;                    // 转换后图像数据缓存
 MV_CC_PIXEL_CONVERT_PARAM stConvertParam = {0}; // 像素格式转换参数
-ros::Publisher image_pub;
+image_transport::Publisher image_pub;
 
 // 图像数据回调函数
 void __stdcall ImageCallback(unsigned char *pData, MV_FRAME_OUT_INFO_EX *pFrameInfo, void *pUser) 
 {
     if (pFrameInfo == nullptr) return;
 
-    stConvertParam.nWidth = pFrameInfo->nWidth;               // ch:图像宽 | en:image width
-    stConvertParam.nHeight = pFrameInfo->nHeight;             // ch:图像高 | en:image height
-    stConvertParam.enSrcPixelType = pFrameInfo->enPixelType;  // ch:输入像素格式 | en:input pixel format
-    stConvertParam.pSrcData = pData;                          // ch:输入数据缓存 | en:input data buffer
-    MV_CC_ConvertPixelType(handle, &stConvertParam);          // 转换图像格式为BGR8
+    stConvertParam.nWidth = pFrameInfo->nWidth;
+    stConvertParam.nHeight = pFrameInfo->nHeight;
+    stConvertParam.enSrcPixelType = pFrameInfo->enPixelType;
+    stConvertParam.pSrcData = pData;
+    MV_CC_ConvertPixelType(handle, &stConvertParam);
 
     // ROS_INFO("Receive image at %ld\n", pFrameInfo->nHostTimeStamp);
 
@@ -31,11 +32,9 @@ void __stdcall ImageCallback(unsigned char *pData, MV_FRAME_OUT_INFO_EX *pFrameI
     cv::Mat frame(pFrameInfo->nHeight, pFrameInfo->nWidth, CV_8UC3, m_pBufForSaveImage);
     sensor_msgs::ImagePtr image_msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", frame).toImageMsg();
 
-    uint64_t sec = pFrameInfo->nHostTimeStamp / 1000;
-    uint64_t nsec = (pFrameInfo->nHostTimeStamp % 1000) * 1000000;
-    image_msg->header.stamp.sec = sec;
-    image_msg->header.stamp.nsec = nsec;
-    image_msg->header.frame_id = "camera_frame";
+    image_msg->header.stamp.sec = pFrameInfo->nHostTimeStamp / 1000;
+    image_msg->header.stamp.nsec = (pFrameInfo->nHostTimeStamp % 1000) * 1000000;
+    image_msg->header.frame_id = "hikrobot_camera";
 
     // 发布图像和相机信息
     image_pub.publish(image_msg);
@@ -46,28 +45,36 @@ int main(int argc, char **argv)
     ros::init(argc, argv, "hikrobot_camera");
     ros::NodeHandle nh;
 
-    int width;                // 图像宽度
-    int height;               // 图像高度
-    int offset_x;             // 图像偏移量（X 轴）
-    int offset_y;             // 图像偏移量（Y 轴）
-    bool frameRateEnable;     // 帧率启用开关
-    int frameRate;            // 配置的帧率值
-    int exposureTime;         // 曝光时间设置（单位：微秒）
-    bool gammaEnable;         // 伽马校正启用开关
-    float gamma;              // 伽马值
-    int triggerMode;          // 触发模式
-    int triggerSource;        // 触发源
+    int Width;
+    int Height;
+    int BinningHorizontal;
+    int BinningVertical;
+    float AcquisitionFrameRate;
+    bool AcquisitionFrameRateEnable;
+    int TriggerMode;
+    int TriggerSource;
+    int TriggerActivation;
+    int ExposureTime;
+    int ExposureAuto;
+    int AutoExposureTimeLowerLimit;
+    int AutoExposureTimeUpperLimit;
+    int BlackLevel;
+    bool BlackLevelEnable;
+    int BalanceWhiteAuto;
+    float Gamma;
+    bool GammaEnable;
 
     // 创建图像发布器
-    image_pub = nh.advertise<sensor_msgs::Image>("/hikrobot_camera/rgb", 10);
+    image_transport::ImageTransport it(nh);
+    image_pub = it.advertise("/hikrobot_camera/rgb", 1);
     
     // 转换后图像数据缓存
     m_pBufForSaveImage = (unsigned char *)malloc(MAX_IMAGE_DATA_SIZE); 
 
-    stConvertParam.nSrcDataLen = MAX_IMAGE_DATA_SIZE;           // ch:输入数据大小 | en:input data size
-    stConvertParam.pDstBuffer = m_pBufForSaveImage;             // ch:输出数据缓存 | en:output data buffer
-    stConvertParam.nDstBufferSize = MAX_IMAGE_DATA_SIZE;        // ch:输出缓存大小 | en:output buffer size
-    stConvertParam.enDstPixelType = PixelType_Gvsp_BGR8_Packed; // ch:输出像素格式 | en:output pixel format
+    stConvertParam.nSrcDataLen = MAX_IMAGE_DATA_SIZE;
+    stConvertParam.pDstBuffer = m_pBufForSaveImage;
+    stConvertParam.nDstBufferSize = MAX_IMAGE_DATA_SIZE;
+    stConvertParam.enDstPixelType = PixelType_Gvsp_BGR8_Packed;
 
     // 初始化 SDK
     int nRet = MV_CC_Initialize();
@@ -102,81 +109,118 @@ int main(int argc, char **argv)
         return -1;
     }
     
-    // 读取摄像头参数配置，如果未提供，则使用默认值
-    nh.param("Width", width, 2600);                      // 图像宽度
-    nh.param("Height", height, 2160);                    // 图像高度
-    nh.param("Offset_x", offset_x, 0);                   // 图像偏移量（X 轴）
-    nh.param("Offset_y", offset_y, 0);                   // 图像偏移量（Y 轴）
-    nh.param("FrameRateEnable", frameRateEnable, false); // 帧率启用开关
-    nh.param("FrameRate", frameRate, 20);                // 帧率值
-    nh.param("ExposureTime", exposureTime, 40000);       // 曝光时间（单位：微秒）
-    nh.param("GammaEnable", gammaEnable, false);         // 伽马校正启用开关
-    nh.param("Gamma", gamma, (float)0.7);                // 伽马值
-    nh.param("TriggerMode", triggerMode, 1);             // 触发模式
-    nh.param("TriggerSource", triggerSource, 0);         // 触发源
+    // 读取参数
+    nh.param("Width", Width, 2600);
+    nh.param("Height", Height, 2160);
+    nh.param("BinningHorizontal", BinningHorizontal, 1);
+    nh.param("BinningVertical", BinningVertical, 1);
+    nh.param("AcquisitionFrameRate", AcquisitionFrameRate, (float)10.0);
+    nh.param("AcquisitionFrameRateEnable", AcquisitionFrameRateEnable, true);
+    nh.param("TriggerMode", TriggerMode, 0);
+    nh.param("TriggerSource", TriggerSource, 0);
+    nh.param("TriggerActivation", TriggerActivation, 0);
+    nh.param("ExposureTime", ExposureTime, 40000);
+    nh.param("ExposureAuto", ExposureAuto, 0);
+    nh.param("AutoExposureTimeLowerLimit", AutoExposureTimeLowerLimit, 3);
+    nh.param("AutoExposureTimeUpperLimit", AutoExposureTimeUpperLimit, 80000);
+    nh.param("BlackLevel", BlackLevel, 100);
+    nh.param("BlackLevelEnable", BlackLevelEnable, true);
+    nh.param("BalanceWhiteAuto", BalanceWhiteAuto, 1);
+    nh.param("Gamma", Gamma, (float)0.7);
+    nh.param("GammaEnable", GammaEnable, true);
 
-    // 设置图像宽度和高度
-    nRet = MV_CC_SetIntValueEx(handle, "Width", width);
-    if (nRet != MV_OK) {
-        ROS_ERROR("Failed to set image width! Error code: %d", nRet);
-    }
-
-    nRet = MV_CC_SetIntValueEx(handle, "Height", height);
-    if (nRet != MV_OK) {
-        ROS_ERROR("Failed to set image height! Error code: %d", nRet);
-    }
-
-    // 设置图像偏移量
-    nRet = MV_CC_SetIntValueEx(handle, "OffsetX", offset_x);
-    if (nRet != MV_OK) {
-        ROS_ERROR("Failed to set offset X! Error code: %d", nRet);
-    }
-
-    nRet = MV_CC_SetIntValueEx(handle, "OffsetY", offset_y);
-    if (nRet != MV_OK) {
-        ROS_ERROR("Failed to set offset Y! Error code: %d", nRet);
-    }
-
-    // 设置帧率
-    nRet = MV_CC_SetBoolValue(handle, "AcquisitionFrameRateEnable", frameRateEnable);
-    if (nRet != MV_OK) {
-        ROS_ERROR("Failed to set frame rate enable! Error code: %d", nRet);
-    }
-    if (frameRateEnable) {
-        nRet = MV_CC_SetFloatValue(handle, "AcquisitionFrameRate", frameRate);
+    if(BinningHorizontal == 1 && BinningVertical == 1) {
+        nRet = MV_CC_SetIntValueEx(handle, "Width", Width);
         if (nRet != MV_OK) {
-            ROS_ERROR("Failed to set frame rate! Error code: %d", nRet);
+            ROS_ERROR("Failed to set Width! Error code: %d", nRet);
+        }
+
+        nRet = MV_CC_SetIntValueEx(handle, "Height", Height);
+        if (nRet != MV_OK) {
+            ROS_ERROR("Failed to set Height! Error code: %d", nRet);
+        }
+    } else {
+        nRet = MV_CC_SetEnumValue(handle, "BinningHorizontal", BinningHorizontal);
+        if (nRet != MV_OK) {
+            ROS_ERROR("Failed to set BinningHorizontal! Error code: %d", nRet);
+        }
+
+        nRet = MV_CC_SetEnumValue(handle, "BinningVertical", BinningVertical);
+        if (nRet != MV_OK) {
+            ROS_ERROR("Failed to set BinningVertical! Error code: %d", nRet);
         }
     }
 
-    // 设置曝光时间
-    nRet = MV_CC_SetFloatValue(handle, "ExposureTime", exposureTime);
+    nRet = MV_CC_SetFloatValue(handle, "AcquisitionFrameRate", AcquisitionFrameRate);
     if (nRet != MV_OK) {
-        ROS_ERROR("Failed to set exposure time! Error code: %d", nRet);
+        ROS_ERROR("Failed to set AcquisitionFrameRate! Error code: %d", nRet);
     }
     
-    // 设置伽马
-    nRet = MV_CC_SetBoolValue(handle, "GammaEnable", gammaEnable);
+    nRet = MV_CC_SetBoolValue(handle, "AcquisitionFrameRateEnable", AcquisitionFrameRateEnable);
     if (nRet != MV_OK) {
-        ROS_ERROR("Failed to set gamma enable! Error code: %d", nRet);
+        ROS_ERROR("Failed to set AcquisitionFrameRateEnable! Error code: %d", nRet);
     }
-    if (gammaEnable) {
-        nRet = MV_CC_SetFloatValue(handle, "Gamma", gamma);
+
+    nRet = MV_CC_SetEnumValue(handle, "TriggerMode", TriggerMode);
+    if (nRet != MV_OK) {
+        ROS_ERROR("Failed to set TriggerMode! Error code: %d", nRet);
+    }
+
+    nRet = MV_CC_SetEnumValue(handle, "TriggerSource", TriggerSource);
+    if (nRet != MV_OK) {
+        ROS_ERROR("Failed to set TriggerSource! Error code: %d", nRet);
+    }
+
+    nRet = MV_CC_SetEnumValue(handle, "TriggerActivation", TriggerActivation);
+    if (nRet != MV_OK) {
+        ROS_ERROR("Failed to set TriggerActivation! Error code: %d", nRet);
+    }
+
+    nRet = MV_CC_SetEnumValue(handle, "ExposureAuto", ExposureAuto);
+    if (nRet != MV_OK) {
+        ROS_ERROR("Failed to set ExposureAuto! Error code: %d", nRet);
+    }
+
+    if(ExposureAuto == 0) {
+        nRet = MV_CC_SetFloatValue(handle, "ExposureTime", ExposureTime);
         if (nRet != MV_OK) {
-            ROS_ERROR("Failed to set gamma! Error code: %d", nRet);
+            ROS_ERROR("Failed to set ExposureTime! Error code: %d", nRet);
+        }
+    } else {
+        nRet = MV_CC_SetIntValueEx(handle, "AutoExposureTimeLowerLimit", AutoExposureTimeLowerLimit);
+        if (nRet != MV_OK) {
+            ROS_ERROR("Failed to set AutoExposureTimeLowerLimit! Error code: %d", nRet);
+        }
+
+        nRet = MV_CC_SetIntValueEx(handle, "AutoExposureTimeUpperLimit", AutoExposureTimeUpperLimit);
+        if (nRet != MV_OK) {
+            ROS_ERROR("Failed to set AutoExposureTimeUpperLimit! Error code: %d", nRet);
         }
     }
 
-    // 设置触发模式
-    nRet = MV_CC_SetEnumValue(handle, "TriggerMode", triggerMode);
+    nRet = MV_CC_SetIntValueEx(handle, "BlackLevel", BlackLevel);
     if (nRet != MV_OK) {
-        ROS_ERROR("Failed to set trigger mode! Error code: %d", nRet);
+        ROS_ERROR("Failed to set BlackLevel! Error code: %d", nRet);
     }
 
-    // 设置触发源
-    nRet = MV_CC_SetEnumValue(handle, "TriggerSource", triggerSource);
+    nRet = MV_CC_SetBoolValue(handle, "BlackLevelEnable", BlackLevelEnable);
     if (nRet != MV_OK) {
-        ROS_ERROR("Failed to set trigger source! Error code: %d", nRet);
+        ROS_ERROR("Failed to set BlackLevelEnable! Error code: %d", nRet);
+    }
+
+    nRet = MV_CC_SetEnumValue(handle, "BalanceWhiteAuto", BalanceWhiteAuto);
+    if (nRet != MV_OK) {
+        ROS_ERROR("Failed to set BalanceWhiteAuto! Error code: %d", nRet);
+    }
+
+    nRet = MV_CC_SetFloatValue(handle, "Gamma", Gamma);
+    if (nRet != MV_OK) {
+        ROS_ERROR("Failed to set Gamma! Error code: %d", nRet);
+    }
+
+    nRet = MV_CC_SetBoolValue(handle, "GammaEnable", GammaEnable);
+    if (nRet != MV_OK) {
+        ROS_ERROR("Failed to set GammaEnable! Error code: %d", nRet);
     }
 
     // 注册图像回调

@@ -27,8 +27,8 @@ include_directories(
 )
 
 LINK_DIRECTORIES(
-  /opt/MVS/lib/64/
-  /opt/MVS/lib/aarch64/
+  /opt/MVS/lib/64/ # x86-64
+  /opt/MVS/lib/aarch64/ # ARM64
 )
 
 add_executable(${PROJECT_NAME}
