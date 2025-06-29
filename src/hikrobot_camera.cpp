@@ -99,6 +99,7 @@ int main(int argc, char **argv)
 
     const char *user_name = getlogin();
     std::string path_for_time_stamp = "/home/" + std::string(user_name) + "/timeshare";
+    const char *shared_file_name = path_for_time_stamp.c_str();
     int fd = open(shared_file_name, O_RDWR);
     pointt = (time_stamp *)mmap(NULL, sizeof(time_stamp), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 
