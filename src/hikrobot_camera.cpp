@@ -8,6 +8,12 @@
 #include "MvErrorDefine.h"
 #include "CameraParams.h"
 
+#include <fcntl.h>        // open, O_RDWR
+#include <unistd.h>       // close, read, write
+#include <sys/mman.h>     // mmap, PROT_READ, PROT_WRITE, MAP_SHARED, MAP_FAILED
+#include <sys/stat.h>     // optional: fstat
+#include <sys/types.h>    // optional: off_t, size_t
+
 #define MAX_IMAGE_DATA_SIZE (3 * 2160 * 2600)
 
 struct time_stamp {
