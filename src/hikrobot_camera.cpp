@@ -10,6 +10,11 @@
 
 #define MAX_IMAGE_DATA_SIZE (3 * 2160 * 2600)
 
+struct time_stamp {
+  int64_t high;
+  int64_t low;
+};
+time_stamp *pointt;
 void *handle = NULL;
 uint8_t *m_pBufForSaveImage;                    // 转换后图像数据缓存
 MV_CC_PIXEL_CONVERT_PARAM stConvertParam = {0}; // 像素格式转换参数
@@ -19,6 +24,15 @@ image_transport::Publisher image_pub;
 void __stdcall ImageCallback(unsigned char *pData, MV_FRAME_OUT_INFO_EX *pFrameInfo, void *pUser) 
 {
     if (pFrameInfo == nullptr) return;
+
+    ros::Time rcv_time;
+    if (pointt != MAP_FAILED && pointt->low != 0) {
+        int64_t b = pointt->low;
+        double time_pc = b / 1000000000.0;
+        rcv_time = ros::Time(time_pc);
+    } else {
+        rcv_time = ros::Time::now();
+    }
 
     stConvertParam.nWidth = pFrameInfo->nWidth;
     stConvertParam.nHeight = pFrameInfo->nHeight;
@@ -32,8 +46,9 @@ void __stdcall ImageCallback(unsigned char *pData, MV_FRAME_OUT_INFO_EX *pFrameI
     cv::Mat frame(pFrameInfo->nHeight, pFrameInfo->nWidth, CV_8UC3, m_pBufForSaveImage);
     sensor_msgs::ImagePtr image_msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", frame).toImageMsg();
 
-    image_msg->header.stamp.sec = pFrameInfo->nHostTimeStamp / 1000;
-    image_msg->header.stamp.nsec = (pFrameInfo->nHostTimeStamp % 1000) * 1000000;
+    // image_msg->header.stamp.sec = pFrameInfo->nHostTimeStamp / 1000;
+    // image_msg->header.stamp.nsec = (pFrameInfo->nHostTimeStamp % 1000) * 1000000;
+    image_msg->header.stamp = rcv_time;
     image_msg->header.frame_id = "hikrobot_camera";
 
     // 发布图像和相机信息
@@ -75,6 +90,11 @@ int main(int argc, char **argv)
     stConvertParam.pDstBuffer = m_pBufForSaveImage;
     stConvertParam.nDstBufferSize = MAX_IMAGE_DATA_SIZE;
     stConvertParam.enDstPixelType = PixelType_Gvsp_BGR8_Packed;
+
+    const char *user_name = getlogin();
+    std::string path_for_time_stamp = "/home/" + std::string(user_name) + "/timeshare";
+    int fd = open(shared_file_name, O_RDWR);
+    pointt = (time_stamp *)mmap(NULL, sizeof(time_stamp), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 
     // 初始化 SDK
     int nRet = MV_CC_Initialize();
